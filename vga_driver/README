@@ -1,0 +1,43 @@
+PetaLinux User Module Template
+===================================
+
+This directory contains a PetaLinux kernel module created from a template.
+
+If you are developing your module from scratch, simply start editing the
+file vga_driver.c.
+
+You can easily import any existing module code by copying it into this 
+directory, and editing the automatically generated Makefile as described below.
+
+To build your module, simply run the "make" command in this directory.
+
+To copy your module binary into your Embedded Linux root filesystem, run
+"make romfs" from this directory.  It will be copied into the directory
+   - petalinux/software/petalinux-dist/romfs/lib/modules/..
+
+If OF(OpenFirmware) is configured, you need to add the device node to the DTS(Device Tree Source) file so that the device can be probed when the mdoule is loaded. Here is an example of the device node in the device tree:
+
+	vga_driver_instance: vga_driver@XXXXXXXX {
+		compatible = "petalogix,vga_driver";
+		reg = <PHYSICAL_START_ADDRESS ADDRESS_RANGE>;
+		interrupt-parent = <&INTR_CONTROLLER_INSTANCE>;
+		interrupts = < INTR_NUM INTR_SENSITIVITY >;
+	};
+Notes:
+ * "vga_driver@XXXXXXXX" is the label of the device node, it is usually the "DEVICE_TYPE@PHYSICAL_START_ADDRESS". E.g. "vga_driver@89000000".
+ * "compatible" needs to match one of the the compatibles in the module's compatible list.
+ * "reg" needs to be pair(s) of the physical start address of the device and the address range.
+ * If the device has interrupt, the "interrupt-parent" needs to be the interrupt controller which the interrupt connects to. and the "interrupts" need to be pair(s) of the interrupt ID and the interrupt sensitivity.
+
+For more information about the the DTS file, please refer to this document in the Linux kernel: linux-2.6.x/Documentation/powerpc/booting-without-of.txt
+
+To rebuild the complete PetaLinux bootable images, run "make image" 
+either from this module directory, or from the main petalinux-dist 
+directory.
+
+To add extra source code files (for example, to split a large module into 
+multiple source files), add the relevant .o files to the list in the local 
+Makefile where indicated.  
+
+
+

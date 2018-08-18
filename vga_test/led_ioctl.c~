@@ -1,0 +1,54 @@
+/*
+ *
+ *Created by Brad and Alastair
+ *Oct 13th, 2016
+ *
+ *
+ */
+#include "led_ioctl.h"
+#include <sys/stat.h>
+#include <sys/types.h>
+#include <unistd.h>
+#include <fcntl.h>
+#include <sys/mman.h>
+
+#define OFLAGS O_RDONLY      //Creates the memory and opens memory respectivley  
+
+
+#define PROT PROT_READ|PROT_WRITE
+#define MFLAGS MAP_SHARED
+
+struct image {
+
+	int *mem_loc;	
+};
+
+int main()
+{
+  
+  float  BUFFER_SIZE = 200;
+
+  struct stat sb;
+
+  int image_fd;
+  int fd; 
+  struct image img;
+  int *buffer;
+
+  // open the file and use mmap to access the image
+image_fd = open("/home/group10/Desktop/example.raw",O_RDONLY);
+ 
+ fstat (image_fd, &sb); //checks if the file opens properly. Returns -1 if error
+
+
+
+ img.mem_loc = (int*)mmap(NULL, sb.st_size, PROT_READ, MAP_SHARED,image_fd, 0);
+
+fd = open("/dev/vga_driver",O_RDWR);
+buffer = (int*)mmap(NULL, BUFFER_SIZE, PROT_READ | PROT_WRITE,MAP_SHARED, fd, 0);
+
+
+	return 0;
+}
+
+

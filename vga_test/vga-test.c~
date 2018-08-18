@@ -1,0 +1,449 @@
+#include <stdio.h>
+#include <signal.h>
+#include <unistd.h>
+#include <fcntl.h>
+#include <sys/mman.h>
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <fcntl.h>
+#include <unistd.h>
+#include <string.h>
+#include <sys/ioctl.h>
+#include "../../user-modules/vga_test/vga_ioctl.h"
+#include <termios.h>
+
+#define SCREEN_W 640
+#define SCREEN_H 480
+
+
+#define CHARACTER_W 11
+#define CHARACTER_H 22
+
+#define BUFFER_SIZE SCREEN_W*SCREEN_H*4
+
+struct pixel{
+	unsigned char r;
+	unsigned char g;
+	unsigned char b;
+	unsigned char a;
+};
+
+struct point{
+	int x;
+	int y;
+};
+
+struct rect{
+	int x;
+	int y;
+	int w;
+	int h;
+};
+
+
+struct image{
+	int *mem_loc;
+	int w;
+	int h;
+};
+
+struct sub_image{
+	int row;
+	int col;
+	int w;
+	int h;
+};
+
+void draw_rectangle(int *screen_buffer, struct rect *r, struct pixel *color) {
+	int xstart, xend, ystart, yend;
+
+
+	/*Invalid screen buffer*/
+	if(!screen_buffer)
+		return;
+
+	/*invalid rectangle*/
+	if (r->w <= 0 || r->h <= 0)
+		return;
+
+	/*Starting offsets if image is partially offscreen*/
+	xstart = (r->x < 0) ? (-1*r->x) : 0;
+	ystart = (r->y < 0) ? (-1*r->y) : 0;
+
+	xend = ((r->x + r->w) > SCREEN_W) ? (SCREEN_W - r->x): r->w;
+	yend = ((r->y + r->h) > SCREEN_H) ? (SCREEN_H - r->y): r->h;
+
+	/*Image is entirely offscreen*/
+	if (ystart == yend || xstart == xend)                                       //rectangle does not exist. just a line of pixels
+		return;
+
+	/*Copy image*/
+	int row, col;
+	for (row = ystart; row < yend; row++) {
+	  for (col = xstart; col < xend; col++) {                                   //increment in x
+			struct pixel src_p, dest_p;
+
+			int *screenP;
+
+			screenP = screen_buffer + (r->x + col) + (r->y + row)*SCREEN_W;    //puts the correct image with the size
+
+			src_p.a = color->a;
+			src_p.r = color->r;
+			src_p.g = color->g;
+			src_p.b = color->b;
+
+			dest_p.b = 0xFF & (*screenP >> 16);
+			dest_p.g = 0xFF & (*screenP >> 8);
+			dest_p.r = 0xFF & (*screenP >> 0);
+
+			dest_p.b = (((int)src_p.b)*src_p.a + ((int)dest_p.b)*(255 - src_p.a))/256;   //combine colour and pixel location for Blue. Taken from code below
+			dest_p.g = (((int)src_p.g)*src_p.a + ((int)dest_p.g)*(255 - src_p.a))/256;   //combine colour and pixel location for Green. Taken from code below
+			dest_p.r = (((int)src_p.r)*src_p.a + ((int)dest_p.r)*(255 - src_p.a))/256;   //combine colour and pixel location for Red.Taken from code below
+
+			*screenP = (dest_p.b << 16) | (dest_p.g << 8) | (dest_p.r << 0);     //printing to screen with shift
+		}
+	}
+
+	return;
+
+}
+
+void draw_image(int *screen_buffer, struct image *i, struct point *p, struct pixel *color) {
+
+	int imgXstart, imgXend, imgYstart, imgYend;
+
+	/*Invalid screen buffer*/
+	if(!screen_buffer)
+		return;
+
+	/*invalid image*/
+	if (!i->mem_loc || i->w <= 0 || i->h <= 0)    //making sue that it has a real width and height
+		return;
+
+	/*Starting offsets if image is partially offscreen*/
+	imgXstart = (p->x < 0) ? -1*p->x : 0;                      //puts the start at the top left corner. The buffer is accounted for in the for loop
+	imgYstart = (p->y < 0) ? -1*p->y : 0;                      //puts the start at the top left corner. The buffer is accounted for in the for loop
+
+	imgXend = (p->x + i->w) > SCREEN_W ? (SCREEN_W - p->x): i->w;   //added the width to get the end of the x value. Same as above but adds the offset
+	imgYend = (p->y + i->h) > SCREEN_H ? (SCREEN_H - p->y): i->h;   //added the hieght to get the end of the y value. Same as above but adds the offset
+
+	/*Image is entirely offscreen*/
+	if (imgXstart == imgXend || imgYstart == imgYend)
+		return;
+
+	/*Copy image*/
+	int row, col;
+	for (row = imgYstart; row < imgYend; row++) {
+		for (col = imgXstart; col < imgXend; col++) {
+			struct pixel src_p, dest_p;
+
+			int *imgP;
+			int *screenP;
+
+			imgP    = i->mem_loc + col + (i->w * row);
+			screenP = screen_buffer + (p->x + col) + (p->y + row)*SCREEN_W;   //Same as above for offsetting on the screen
+
+			src_p.a = 0xFF & (*imgP >> 24);
+
+			if(color) {
+				src_p.r = color->r;
+				src_p.g = color->g;
+				src_p.b = color->b;
+			}
+			else {
+				src_p.b = 0xFF & (*imgP >> 16);
+				src_p.g = 0xFF & (*imgP >> 8);
+				src_p.r = 0xFF & (*imgP >> 0);
+			}
+
+			dest_p.b = 0xFF & (*screenP >> 16);
+			dest_p.g = 0xFF & (*screenP >> 8);
+			dest_p.r = 0xFF & (*screenP >> 0);
+
+
+			dest_p.b = (((int)src_p.b)*src_p.a + ((int)dest_p.b)*(255 - src_p.a))/256;
+			dest_p.g = (((int)src_p.g)*src_p.a + ((int)dest_p.g)*(255 - src_p.a))/256;
+			dest_p.r = (((int)src_p.r)*src_p.a + ((int)dest_p.r)*(255 - src_p.a))/256;
+
+			*screenP = (dest_p.b << 16) | (dest_p.g << 8) | (dest_p.r << 0);   //Same as above
+		}
+	}
+
+	return;
+
+}
+
+
+
+void draw_sub_image(int *screen_buffer, struct image *i, struct point *p, struct sub_image *sub_i, struct pixel *color) {
+
+        	printf("draw Subimage\n" );
+
+	int imgXstart, imgXend, imgYstart, imgYend;
+
+	//Invalid screen buffer
+	if(!screen_buffer)
+		return;
+
+	//invalid image
+	if (!i || sub_i->w <= 0 || sub_i->h <= 0)
+		return;
+
+	//Starting offsets if image is partially offscreen
+	imgXstart = (p->x < 0) ? -1*p->x : 0;
+	imgYstart = (p->y < 0) ? -1*p->y : 0;
+
+	imgXend = (p->x + sub_i->w) > SCREEN_W ? (SCREEN_W - p->x): sub_i->w;
+	imgYend = (p->y + sub_i->h) > SCREEN_H ? (SCREEN_H - p->y): sub_i->h;
+
+	//Image is entirely offscreen
+	if (imgXstart == imgXend || imgYstart == imgYend)
+		return;
+
+	//Copy image
+	int row, col;
+	for (row = imgYstart; row < imgYend; row++) {
+		for (col = imgXstart; col < imgXend; col++) {
+			struct pixel src_p, dest_p;
+
+			int *imgP;
+			int *screenP;
+
+			imgP    = i->mem_loc + col + sub_i->col + (i->w * (row + sub_i->row));
+			screenP = screen_buffer + (p->x + col) + (p->y + row)*SCREEN_W;
+
+			src_p.a = 0xFF & (*imgP >> 24);
+
+			if(color) {
+				src_p.r = color->r;
+				src_p.g = color->g;
+				src_p.b = color->b;
+			}
+			else {
+				src_p.b = 0xFF & (*imgP >> 16);
+				src_p.g = 0xFF & (*imgP >> 8);
+				src_p.r = 0xFF & (*imgP >> 0);
+			}
+
+			dest_p.b = 0xFF & (*screenP >> 16);
+			dest_p.g = 0xFF & (*screenP >> 8);
+			dest_p.r = 0xFF & (*screenP >> 0);
+
+
+			dest_p.b = (((int)src_p.b)*src_p.a + ((int)dest_p.b)*(255 - src_p.a))/256;
+			dest_p.g = (((int)src_p.g)*src_p.a + ((int)dest_p.g)*(255 - src_p.a))/256;
+			dest_p.r = (((int)src_p.r)*src_p.a + ((int)dest_p.r)*(255 - src_p.a))/256;
+
+			*screenP = (dest_p.b << 16) | (dest_p.g << 8) | (dest_p.r << 0);
+		}
+	}
+
+
+}
+
+void draw_letter(char a, int *screen_buffer, struct image *i, struct point *p, struct pixel *color) {
+
+        	printf("draw letter\n" );
+    struct sub_image sub_i;    //chosen sub image
+
+    sub_i.row = 23*((0x0F & (a >> 4))%16) + 1;
+    sub_i.col = 12*((0x0F & (a >> 0))%16) + 1;
+    sub_i.w = 11;
+    sub_i.h = 22;
+
+
+    draw_sub_image(screen_buffer, i, p, &sub_i, color);
+
+
+}
+
+void draw_string(char s[], int *screen_buffer, struct image *i, struct point *p, struct pixel *color) {
+        	printf("draw string\n" );
+    int index = 0;
+    while(s[index]) {
+    	draw_letter(s[index], screen_buffer, i, p, color);
+		p->x += index;
+		index++;
+    }
+}
+
+
+
+
+
+
+
+
+struct vga_ioctl_data data;
+int fd;
+int image_fd;
+int serial_fd;
+
+int main(int argc, char *argv[])
+{
+	int * buffer;
+    struct image img;
+    struct point p;
+    int i, j;
+    struct pixel color;
+    struct rect r;
+    int row, col;
+    struct stat sb;
+	struct termios tio;
+
+	memset(&tio, 0, sizeof(tio));
+    
+	fd = open("/dev/vga_driver",O_RDWR);
+	image_fd = open("/home/root/example2.raw",O_RDONLY);  
+		
+	if(image_fd  == -1){
+			printf("Failed to open image... :( \n");
+	}
+		
+	//serial_fd = open("/dev/ttyS1",O_RDWR);
+
+	serial_fd = open("/dev/ttyPS0",O_RDWR);
+
+
+	if(serial_fd  == -1){
+			printf("Failed to open serial port... :( \n");
+	}
+
+	tcgetattr(serial_fd, &tio);
+	cfsetospeed(&tio, B115200);
+	cfsetispeed(&tio, B115200);
+	tio.c_lflag = tio.c_lflag & ~(ICANON);
+	tcsetattr(serial_fd, TCSANOW, &tio);
+
+	if(fd != -1){
+		
+		buffer = (int*)mmap(NULL, BUFFER_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+		printf("buffer addr: 0x%08x\n", buffer);
+
+        fstat (image_fd, &sb);
+        img.mem_loc = (int*)mmap(NULL, sb.st_size, PROT_READ, MAP_SHARED, image_fd, 0);
+        if ( img.mem_loc == MAP_FAILED) {
+                  perror ("mmap");
+          } 
+    	printf("image addr: 0x%08x\n", img.mem_loc );
+    	
+
+        for (row = 0; row < 480; row++) {
+            for (col = 0; col < 640; col++) {
+                    	*(buffer + col + row*640) = 0x00000000;
+    	    }
+    	}
+    	printf("screen cleared\n" );
+    	  	
+    	  p.x = 20;
+    	  p.y = 20;
+    	    	
+    	color.r = 128;
+        color.g = 64;
+        color.b = 128;
+        color.a = 255;
+        
+    	img.w = 192;                                                
+        img.h = 368;
+        
+       while(1) {
+            char c;
+        	//fflush(stdout);
+            read(serial_fd, &c, 1);
+
+            draw_letter(c, buffer, &img, &p, &color);
+          
+          	color.r = rand() % 255;
+            color.g = rand() % 255;
+           	color.b = rand() % 255;
+
+           if( p.x >= SCREEN_W - CHARACTER_W || c == 10)
+           {
+               //line_end[y/CHARACTER_H] = x;
+               p.x = 0;
+               p.y = p.y + CHARACTER_H;
+           }
+           
+           int base = (CHARACTER_W+1)*(c%16) + (16*(CHARACTER_W+1)*(CHARACTER_H+1)*(c/16)) + 193;
+           p.x+=11;
+    	   if (p.x > 640-12*2) {
+                p.x = 20;
+                p.y += 22;
+                if (p.y > 480-23*2) {
+                    p.y = 20;
+                    for (row = 0; row < 480; row++) {
+                        for (col = 0; col < 640; col++) {
+                                	*(buffer + col + row*640) = 0x00000000;
+                	    }
+                	}
+                }
+           }
+	   }
+	
+
+		msync(buffer, BUFFER_SIZE, MS_SYNC);
+    	
+    	printf("buffer synced\n" );
+	
+    	color.r = 10;
+        color.g = 156;               
+        color.b = 114;
+        color.a = 255;
+
+        r.x = 100;
+        r.y = 50;
+        r.w = 100;
+        r.h = 100;
+
+        draw_rectangle(buffer, &r, &color);                               //fixed
+            msync(buffer, BUFFER_SIZE, MS_SYNC);
+	    
+        img.w = 192;
+        img.h = 368;
+	
+        p.x = 0;
+        p.y = 0;
+		
+        draw_image(buffer, &img, &p, NULL);
+
+
+    	color.r = 10;
+        color.g = 156;               
+        color.b = 114;
+        color.a = 255;
+
+        r.x = 100;
+        r.y = 50;
+        r.w = 100;
+        r.h = 100;
+
+        draw_rectangle(buffer, &r, &color);                               //fixed
+            msync(buffer, BUFFER_SIZE, MS_SYNC);
+	
+        p.x = 50;
+        p.y = 10;
+	
+        draw_string("Test String A", buffer,  &img, &p, NULL);
+	
+        p.x = 362;
+        p.y = 256;
+
+        color.r = 128;
+        color.g = 64;
+        color.b = 10;
+
+        draw_string("Blah Blah", buffer,  &img, &p, &color);
+
+
+    msync(buffer, BUFFER_SIZE, MS_SYNC);
+	
+   // close(?);                                                  
+   // close(?);                                                    
+
+	}else{
+		printf("Failed to open driver... :( \n");
+	}
+	return 0;
+}
+
+
